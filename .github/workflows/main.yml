@@ -1,0 +1,135 @@
+name: Windows Virtual + AnyDesk
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 360
+
+    env:
+      ANYDESK_PATH: C:\Program Files (x86)\AnyDesk\AnyDesk.exe
+
+    steps:
+      - name: Baixar AnyDesk oficial
+        shell: powershell
+        run: |
+          $url = "https://download.anydesk.com/AnyDesk.exe"
+          $out = "$env:TEMP\AnyDesk.exe"
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $out `
+            -UseBasicParsing
+
+          if (-not (Test-Path $out)) {
+            throw "Falha ao baixar o AnyDesk."
+          }
+
+          Write-Host "Download concluído."
+
+      - name: Instalar AnyDesk
+        shell: powershell
+        run: |
+          $installer = "$env:TEMP\AnyDesk.exe"
+          $installDir = "C:\Program Files (x86)\AnyDesk"
+
+          Start-Process `
+            -FilePath $installer `
+            -ArgumentList "--install `"$installDir`" --start-with-win --silent" `
+            -Wait
+
+          Start-Sleep -Seconds 5
+
+          if (-not (Test-Path $env:ANYDESK_PATH)) {
+            throw "AnyDesk.exe não foi encontrado após a instalação."
+          }
+
+          Write-Host "AnyDesk instalado."
+
+      - name: Iniciar serviço do AnyDesk
+        shell: powershell
+        run: |
+          & $env:ANYDESK_PATH --start
+
+          Start-Sleep -Seconds 8
+
+          Write-Host "AnyDesk iniciado."
+
+      - name: Configurar senha do acesso não supervisionado
+        shell: powershell
+        env:
+          ANYDESK_PASSWORD: ${{ secrets.ANYDESK_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ANYDESK_PASSWORD)) {
+            throw "Configure o Secret ANYDESK_PASSWORD no GitHub."
+          }
+
+          Write-Output "::add-mask::$env:ANYDESK_PASSWORD"
+
+          $env:ANYDESK_PASSWORD |
+            & $env:ANYDESK_PATH --set-password _unattended_access
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Não foi possível configurar a senha do AnyDesk."
+          }
+
+          Write-Host "Senha configurada."
+
+      - name: Obter ID do AnyDesk
+        shell: powershell
+        run: |
+          $bat = "$env:TEMP\get-anydesk-id.bat"
+
+          @"
+          @echo off
+          for /f "delims=" %%i in ('"$env:ANYDESK_PATH" --get-id') do set "ID=%%i"
+          echo %ID%
+          "@ | Set-Content -Path $bat -Encoding ASCII
+
+          $id = ""
+
+          for ($i = 1; $i -le 10; $i++) {
+            $result = cmd.exe /c "`"$bat`""
+            $candidate = ($result | Select-Object -Last 1).Trim()
+
+            if ($candidate -match '^\d{9,10}$') {
+              $id = $candidate
+              break
+            }
+
+            Start-Sleep -Seconds 3
+          }
+
+          if ([string]::IsNullOrWhiteSpace($id)) {
+            Write-Host "Não foi possível obter o ID."
+            Write-Host "Status do AnyDesk:"
+            & $env:ANYDESK_PATH --get-status
+            exit 1
+          }
+
+          Write-Host ""
+          Write-Host "================================="
+          Write-Host " ANYDESK ID: $id"
+          Write-Host "================================="
+          Write-Host ""
+
+      - name: Nome aleatório da sessão
+        shell: powershell
+        run: |
+          $chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+          $random = -join (1..8 | ForEach-Object {
+            $chars[(Get-Random -Maximum $chars.Length)]
+          })
+
+          Write-Host "Nome da sessão: WIN-$random"
+
+      - name: Manter a VM ativa
+        shell: powershell
+        run: |
+          Write-Host "Windows virtual ativo."
+          Start-Sleep -Seconds 21000
